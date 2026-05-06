@@ -53,7 +53,7 @@ async function generateScalerHTML(toolInput = {}) {
   const instruction =
     typeof toolInput?.instruction === "string" && toolInput.instruction.trim()
       ? toolInput.instruction.trim()
-      : "Clone the Scaler Academy landing page with header, hero section, and footer.";
+      : "Clone a Scaler Academy-style landing page (sticky header, blue hero, highlight cards, AI SHIFT section with video, who-it-is-for section, and footer/help bar).";
 
   const currentHtml =
     typeof toolInput?.currentHtml === "string" && toolInput.currentHtml.trim() ? toolInput.currentHtml.trim() : "";
@@ -73,8 +73,9 @@ async function generateScalerHTML(toolInput = {}) {
     "You are a senior frontend engineer.",
     "Return ONLY a complete, standalone HTML document (no markdown, no explanations).",
     "Use inline <style> and <script> (no external JS/CSS), except Google Fonts for Inter.",
-    "The output must visually resemble the Scaler Academy landing page style.",
-    "Must include: Header, Hero section, Footer.",
+    "The output must visually resemble a Scaler Academy-style landing page.",
+    "Must include: sticky header with logo + nav + CTA, blue gradient hero with 2 CTA buttons, a 3-card highlights row, an 'AI SHIFT' section, a 'WHO IT IS FOR' section, and a footer/help bar.",
+    "Use modern layout: centered container, generous whitespace, bold typography (Inter), subtle borders, and soft shadows.",
     "Use semantic HTML and make it responsive.",
     "Avoid external images; use placeholders (CSS shapes) if needed.",
     "Do not include multiple HTML documents.",
@@ -87,8 +88,9 @@ async function generateScalerHTML(toolInput = {}) {
       : "\nNo current HTML provided. Generate a fresh page.",
     "\nOutput requirements:",
     "- Single HTML file that runs in a browser",
-    "- Includes header nav, hero section, and a footer",
+    "- Sections: Header, Hero, Highlights cards, AI SHIFT (with video embed), WHO IT IS FOR, Footer + help bar",
     "- Uses Inter font",
+    "- Keep the hero background light/blue (not dark/grey)",
   ].join("\n");
 
   const response = await htmlClient.chat.completions.create({
@@ -251,6 +253,28 @@ function extractJsonObjects(raw) {
   return objects;
 }
 
+function getLatestUserInstruction(messages) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg || msg.role !== "user") continue;
+    const content = typeof msg.content === "string" ? msg.content.trim() : "";
+    if (!content) continue;
+
+    // Skip OBSERVE payloads we inject back into the model
+    if (content.startsWith("{") && content.includes('"step"')) {
+      try {
+        const parsed = JSON.parse(content);
+        if (parsed?.step === "OBSERVE") continue;
+      } catch {
+        // Not JSON; treat as user instruction
+      }
+    }
+
+    return content;
+  }
+  return "";
+}
+
 async function runAgentLoop(messages) {
   let iterations = 0;
 
@@ -334,7 +358,21 @@ async function runAgentLoop(messages) {
           } else if (toolName === "listFiles") {
             result = tool_map.listFiles(toolInput.folderPath);
           } else if (toolName === "generateScalerHTML") {
-            result = await tool_map.generateScalerHTML(toolInput);
+            const enriched = { ...toolInput };
+
+            if (typeof enriched.instruction !== "string" || !enriched.instruction.trim()) {
+              enriched.instruction = getLatestUserInstruction(messages);
+            }
+
+            if (typeof enriched.currentHtml !== "string" || !enriched.currentHtml.trim()) {
+              try {
+                enriched.currentHtml = tool_map.readFile("scaler_clone/index.html");
+              } catch {
+                // No existing file yet; generate from scratch
+              }
+            }
+
+            result = await tool_map.generateScalerHTML(enriched);
           } else {
             result = `Error: tool ${toolName} not supported by dispatcher`;
           }
