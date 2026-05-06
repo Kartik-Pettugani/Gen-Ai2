@@ -2,20 +2,143 @@ import readline from "readline";
 import "dotenv/config";
 import OpenAI from "openai";
 
-import { tool_map, tools_description } from "./tools.js";
+import fs from "fs";
+import path from "path";
+
+function resolveFromRoot(p) {
+  return path.resolve(process.cwd(), p);
+}
+
+function createFolder(folderPath) {
+  const abs = resolveFromRoot(folderPath);
+  fs.mkdirSync(abs, { recursive: true });
+  return `Folder created: ${folderPath}`;
+}
+
+function createFile(filePath, content) {
+  const abs = resolveFromRoot(filePath);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, content, "utf8");
+  return `File created: ${filePath}`;
+}
+
+function readFile(filePath) {
+  const abs = resolveFromRoot(filePath);
+  return fs.readFileSync(abs, "utf8");
+}
+
+function listFiles(folderPath) {
+  const abs = resolveFromRoot(folderPath);
+  const files = fs.readdirSync(abs);
+  return files.join(", ");
+}
+
+function stripCodeFences(s) {
+  if (typeof s !== "string") return "";
+  const trimmed = s.trim();
+  if (!trimmed.includes("```")) return trimmed;
+  return trimmed.replace(/```[a-zA-Z]*\n?/g, "").replace(/```/g, "").trim();
+}
+
+function extractHtmlDocument(s) {
+  const text = stripCodeFences(s);
+  const idx = text.toLowerCase().indexOf("<!doctype html");
+  if (idx >= 0) return text.slice(idx).trim();
+  const htmlIdx = text.toLowerCase().indexOf("<html");
+  if (htmlIdx >= 0) return "<!doctype html>\n" + text.slice(htmlIdx).trim();
+  return text;
+}
+
+async function generateScalerHTML(toolInput = {}) {
+  const instruction =
+    typeof toolInput?.instruction === "string" && toolInput.instruction.trim()
+      ? toolInput.instruction.trim()
+      : "Clone the Scaler Academy landing page with header, hero section, and footer.";
+
+  const currentHtml =
+    typeof toolInput?.currentHtml === "string" && toolInput.currentHtml.trim() ? toolInput.currentHtml.trim() : "";
+
+  if (!process.env.GROQ_API_KEY) {
+    throw new Error("Missing GROQ_API_KEY. Add it to .env before generating HTML.");
+  }
+
+  const htmlClient = new OpenAI({
+    apiKey: process.env.GROQ_API_KEY,
+    baseURL: "https://api.groq.com/openai/v1",
+  });
+
+  const model = process.env.GROQ_HTML_MODEL || "llama-3.1-8b-instant";
+
+  const system = [
+    "You are a senior frontend engineer.",
+    "Return ONLY a complete, standalone HTML document (no markdown, no explanations).",
+    "Use inline <style> and <script> (no external JS/CSS), except Google Fonts for Inter.",
+    "The output must visually resemble the Scaler Academy landing page style.",
+    "Must include: Header, Hero section, Footer.",
+    "Use semantic HTML and make it responsive.",
+    "Avoid external images; use placeholders (CSS shapes) if needed.",
+    "Do not include multiple HTML documents.",
+  ].join("\n");
+
+  const user = [
+    `Instruction:\n${instruction}`,
+    currentHtml
+      ? `\nCurrent HTML (modify this to satisfy the instruction; keep structure unless instruction requires change):\n${currentHtml}`
+      : "\nNo current HTML provided. Generate a fresh page.",
+    "\nOutput requirements:",
+    "- Single HTML file that runs in a browser",
+    "- Includes header nav, hero section, and a footer",
+    "- Uses Inter font",
+  ].join("\n");
+
+  const response = await htmlClient.chat.completions.create({
+    model,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+    temperature: 0.2,
+    max_tokens: 4096,
+  });
+
+  const raw = (response.choices?.[0]?.message?.content ?? "").trim();
+  const html = extractHtmlDocument(raw);
+
+  if (!html.toLowerCase().includes("<html") || !html.toLowerCase().includes("</html>")) {
+    throw new Error("Model did not return a valid HTML document.");
+  }
+
+  return html;
+}
+
+const tool_map = {
+  createFolder,
+  createFile,
+  readFile,
+  listFiles,
+  generateScalerHTML,
+};
+
+const tools_description = `
+1) createFolder(folderPath): Creates a directory at the given path (relative to project root) using fs.mkdirSync({ recursive: true }). Returns: "Folder created: <folderPath>".
+2) createFile(filePath, content): Creates a file at the given path, writing the provided content using fs.writeFileSync. Creates parent directories as needed using fs.mkdirSync({ recursive: true }) on the dirname. Returns: "File created: <filePath>".
+3) readFile(filePath): Reads and returns the content of a file using fs.readFileSync. Returns the file content as a string.
+4) listFiles(folderPath): Lists all files in a directory using fs.readdirSync. Returns a comma-separated string of filenames.
+5) generateScalerHTML({ instruction, currentHtml }): Uses the Groq LLM to generate (or modify) a complete, self-contained HTML document (inline CSS + JS, Inter font). Returns the HTML as a string.
+`.trim();
 
 const client = new OpenAI({
   apiKey: process.env.GROQ_API_KEY,
   baseURL: "https://api.groq.com/openai/v1",
 });
 
-const MODEL = "llama-3.1-8b-instant";
+const MODEL = process.env.GROQ_AGENT_MODEL || "llama-3.1-8b-instant";
 
 async function callWithRetry(messages, systemPrompt, retries = 3) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const response = await client.chat.completions.create({
-        model: "llama-3.1-8b-instant",
+        model: MODEL,
         messages: [{ role: "system", content: systemPrompt }, ...messages],
         max_tokens: 1024,
         temperature: 0.2,
@@ -52,13 +175,12 @@ const systemPrompt = [
   "Available Tools:",
   tools_description,
   "",
-  "When the user asks to clone the Scaler website, follow this exact plan:",
-  "",
-  "THINK: identify what folder and file are needed",
-  'TOOL: call createFolder with folderPath = "scaler_clone"',
-  "TOOL: call generateScalerHTML (no arguments needed)",
-  "TOOL: call createFile with the HTML content from the previous OBSERVE",
-  'OUTPUT: tell the user to open scaler_clone/index.html in their browser',
+  "General guidance:",
+  "- Your job is to generate or modify a working Scaler-like landing page as requested.",
+  "- Prefer iterating: create folder → read existing HTML (if any) → generate new HTML → write file → optionally re-read to verify.",
+  "- To generate HTML, call generateScalerHTML with tool_input = { instruction: <user request>, currentHtml?: <existing html> }.",
+  "- To modify an existing page, first readFile('scaler_clone/index.html') and pass it as currentHtml to generateScalerHTML.",
+  "- Always ensure output includes Header, Hero section, and Footer.",
 ].join("\n");
 
 function printBanner() {
@@ -212,7 +334,7 @@ async function runAgentLoop(messages) {
           } else if (toolName === "listFiles") {
             result = tool_map.listFiles(toolInput.folderPath);
           } else if (toolName === "generateScalerHTML") {
-            result = tool_map.generateScalerHTML();
+            result = await tool_map.generateScalerHTML(toolInput);
           } else {
             result = `Error: tool ${toolName} not supported by dispatcher`;
           }

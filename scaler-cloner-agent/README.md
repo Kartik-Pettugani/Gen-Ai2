@@ -41,12 +41,13 @@ Clone the Scaler Academy website
 ## How it works (simple)
 
 - You type an instruction.
-- The LLM must respond with **single-line JSON** describing one step:
+- The agent LLM responds with **single-line JSON** describing one step:
   - `START` (summarize)
   - `THINK` (reason)
   - `TOOL` (call exactly one tool)
   - `OUTPUT` (finish with a summary)
-- The CLI executes tools from `tools.js`, prints an OBSERVE result, and feeds that result back to the model.
+- The CLI executes the tools (defined in `index.js`), prints an OBSERVE result, and feeds that result back to the model.
+- The page HTML is generated/modified by the LLM via the `generateScalerHTML({ instruction, currentHtml })` tool.
 
 ## Output
 
@@ -54,3 +55,13 @@ Clone the Scaler Academy website
   - `scaler_clone/index.html`
 
 Open it in any browser.
+
+## Iterating (the "agent loop")
+
+After the first clone, you can keep chatting to change the page. For example:
+
+```
+Attach this YouTube video in the AI SHIFT section and make it responsive
+```
+
+The agent should read the current HTML, regenerate an updated HTML file, and write it back.
