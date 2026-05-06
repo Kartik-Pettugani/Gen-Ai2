@@ -1,0 +1,29 @@
+.env
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# Builds / caches
+dist/
+build/
+.cache/
+.parcel-cache/
+.eslintcache
+
+# Environment files
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Generated output from the agent
+scaler_clone/index.html
